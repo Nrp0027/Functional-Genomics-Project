@@ -1,0 +1,119 @@
+#!/bin/bash
+
+######### FunGen Final Project: Dog RNAseq Mapping Script ############
+# Target: Canis lupus familiaris (GCF_000002285.5)
+######################################################################
+
+#### 1. Load Necessary Modules
+source /apps/profiles/modules_asax.sh.dyn
+module load hisat2/2.2.0
+module load stringtie/2.2.1
+module load gcc/9.4.0
+module load python/3.10.8-zimemtc
+module load samtools
+module load bcftools
+module load gffread
+
+# Set system resource limits
+ulimit -s unlimited
+set -x
+
+########## 2. Define Variables and Paths
+MyID=aubclsf0058
+
+# Main working directory
+WD=/scratch/$MyID/revisedFinalproject
+# Path to clean data (trimmed reads)
+CD=$WD/2_trimming
+# Path to reference genome
+REFD=/scratch/$MyID/FinalProject/DogRefGenome/ncbi_dataset/data/GCF_000002285.5
+# Output directories
+MAPD=$WD/3_mapping/Map_HiSat2
+COUNTSD=$WD/3_mapping/Counts_StringTie
+RESULTSD=revisedFinalproject_results
+
+# Reference genome prefix
+REF=dog_ref
+
+## Create necessary subdirectories
+mkdir -p $MAPD
+mkdir -p $COUNTSD
+mkdir -p $RESULTSD
+
+################## 3. Prepare Reference Genome Index (HiSat2 Index) #############################
+cd $REFD
+
+# A. Convert GFF3 to GTF
+if [ ! -f ${REF}.gtf ]; then
+    gffread ${REF}.gff3 -T -o ${REF}.gtf
+fi
+
+# B. Extract splice sites and exons information
+if [ ! -f ${REF}.ss ]; then
+    hisat2_extract_splice_sites.py ${REF}.gtf > ${REF}.ss
+    hisat2_extract_exons.py ${REF}.gtf > ${REF}.exon
+fi
+
+# C. Build Index (The dog genome is large; ensure high memory is requested)
+# Skip if the index already exists to save time
+if [ ! -f dog_index.1.ht2 ]; then
+    hisat2-build -p 6 --ss ${REF}.ss --exon ${REF}.exon ${REF}.fasta dog_index
+fi
+
+######################## 4. Loop for Alignment and Quantification (Map and Count) ########################
+
+# Enter data directory to generate sample list
+cd ${CD}
+# For your filename format: Extract the SRRxxxxxxx part
+ls *paired.fastq | cut -d "_" -f 1 | sort | uniq > $MAPD/list
+
+# Move to mapping directory to begin processing
+cd ${MAPD}
+
+while read i;
+do
+    echo "Processing sample: $i"
+
+    ## A. HiSat2 Alignment
+    # Using your filename patterns: _1_paired.fastq and _2_paired.fastq
+    hisat2 -p 6 --dta --phred33 \
+        -x "${REFD}"/dog_index \
+        -1 "${CD}"/"$i"_1_paired.fastq \
+        -2 "${CD}"/"$i"_2_paired.fastq \
+        -S "$i".sam
+
+    ## B. Convert SAM to BAM and Sort
+    samtools view -@ 6 -bS "$i".sam > "$i".bam
+    samtools sort -@ 6 "$i".bam -o "$i"_sorted.bam
+    
+    # Create index and generate quality statistics
+    samtools index "$i"_sorted.bam
+    samtools flagstat "$i"_sorted.bam > "$i"_Stats.txt
+
+    ## C. StringTie Quantification
+    mkdir -p "${COUNTSD}"/"$i"
+    stringtie -p 6 -e -B -G "${REFD}"/"${REF}".gtf \
+        -o "${COUNTSD}"/"$i"/"$i".gtf \
+        -l "$i" "${MAPD}"/"$i"_sorted.bam
+
+    # Remove intermediate SAM and unsorted BAM files to save space
+    rm "$i".sam "$i".bam
+
+done < list
+
+##################### 5. Organize and Summarize Results #############################
+# Copy statistics files to results directory
+cp ${MAPD}/*_Stats.txt ${RESULTSD}/
+
+# Run prepDE.py3 to generate Count Matrix
+cd ${COUNTSD}
+if [ ! -f prepDE.py3 ]; then
+    wget http://ccb.jhu.edu/software/stringtie/dl/prepDE.py3
+    chmod +x prepDE.py3
+fi
+
+# Execute script. -i . will scan for GTF files in all subdirectories of the current path
+python3 prepDE.py3 -i .
+
+# Copy final CSV results back to Home directory for easy access
+cp *.csv ${RESULTSD}
