@@ -19,10 +19,10 @@ all(rownames(coldata) == colnames(countdata))
  coldata$sex <- factor(coldata$sex, levels = c("male", "female"))
  dds$sex <- factor(dds$sex, levels=c("male","female"))
  model.matrix(~ sex, data = coldata)
-####   Prefiltering
+### Prefiltering
  dds <- dds[ rowSums(counts(dds)) > 20, ]
  dds
-####     1.4 Differential expression analysis
+### Differential expression analysis
  dds <- DESeq(dds)
  res <- results(dds)
  res
@@ -30,12 +30,30 @@ all(rownames(coldata) == colnames(countdata))
  summary(res05)
  sum(res05$padj < 0.05, na.rm=TRUE)
  head(res[order(res$padj),], 10)
-###    1.5.1 MA-plot
+###  MA-plot
  plotMA(res, main="DESeq2", ylim=c(-8,8))
-##  1.5.2 Plot counts
+### Plot counts- sanity check 
  plotCounts(dds, gene="gene-KLK1|KLK1", intgroup="sex")
- ##  Write your results to a file
+ ### Write your results to a file
  write.csv(as.data.frame(resOrdered), file="DGESeq_results.csv")
- ## 2.1.2 Extracting transformed values
+ ### Extracting transformed values
  rld <- rlog(dds)
- vsd <- varianceStabilizingTransf
+ vsd <- varianceStabilizingTransformation(dds)
+head(assay(rld), 3)
+  ### Heatmap of the count matrix top 50 genes
+ topVarGenes <- head(order(rowVars(assay(vsd)), decreasing = TRUE), 50)
+ library("pheatmap")
+ mat  <- assay(vsd)[ topVarGenes, ]
+ mat  <- mat - rowMeans(mat)
+ anno <- as.data.frame(colData(vsd)[, "sex", drop= FALSE])
+ df <- as.data.frame(colData(dds)[,"sex",drop= FALSE])
+ pheatmap(mat, annotation_col = anno)
+ ### Heatmap of the sample-to-sample distances
+pheatmap(
+  sampleDistMatrix,
+  clustering_distance_rows = sampleDists,
+  clustering_distance_cols = sampleDists,
+  col = colors
+))
+ ### Principal component plot of the samples
+ plotPCA(rld, intgroup=c("sex"))
