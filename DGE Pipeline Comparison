@@ -1,0 +1,138 @@
+This pipeline is to compare the EdgeR and DESeq2 pipelines for DEG differences.
+
+### Instal needed packages
+> if (!require("BiocManager", quietly = TRUE))
++ install.packages("BiocManager")
+> setwd("C:/Users/07liz/OneDrive - Auburn University/Functional Genomics/DGE coding-- DESeq2 and EdgeR")
+> library(edgeR)
+### Read count and phenotype data
+> counts <- read.csv("gene_count_matrix 1.csv", row.names = 1)
+> meta <- read.table("PHENO_DATA1.txt", header = TRUE, row.names = 1)
+### EdgeR Differential Expression analysis
+> meta$sex <- factor(meta$sex)
+> y <- DGEList(counts=counts, group=meta$sex)
+> keep <- rowSums(y$counts) > 20
+> y <- y[keep, , keep.lib.sizes = FALSE]
+> y <- calcNormFactors(y)
+> design <- model.matrix(~ sex, data = meta)
+> y <- estimateDisp(y, design)
+> fit <- glmFit(y, design)
+> lrt <- glmLRT(fit, coef = 2)
+> edgeR_results <- topTags(lrt, n = Inf)$table
+###Write results to a CSV file  and open DESeq2 results
+> res_deseq <- read.csv("DGESeq_results.csv", row.names = 1)
+> write.csv(edgeR_results, "edgeR_results.csv")
+###Merge Results
+> res_deseq <- read.csv("DGESeq_results.csv", row.names = 1)
+> merged <- merge(
++     res_deseq[, c("log2FoldChange", "padj")],
++     edgeR_results[, c("logFC", "FDR")],
++     by = "row.names",
++     suffixes = c("_DESeq2", "_edgeR")
++ )
+> colnames(merged) <- c(
++     "log2FoldChange_DESeq2",
++     "padj_DESeq2",
++     "logFC_edgeR",
++     "FDR_edgeR"
++ )
+> colnames(merged)
+###Find correlation
+> correlation <- cor(
++     merged$log2FoldChange_DESeq2,
++     merged$logFC_edgeR,
++     use = "complete.obs"
++ )
+>
+> correlation
+###Comparing sig DEG between pipelines
+> sig_deseq <- rownames(res_deseq[res_deseq$padj < 0.05, ])
+> sig_edgeR <- rownames(edgeR_results[edgeR_results$FDR < 0.05, ])
+>
+> common <- intersect(sig_deseq, sig_edgeR)
+> only_deseq <- setdiff(sig_deseq, sig_edgeR)
+> only_edgeR <- setdiff(sig_edgeR, sig_deseq)
+> length(common)
+> length(only_deseq)
+> length(only_edgeR)
+###venn diagram of DEG
+ggVennDiagram(list(DESeq2 = sig_deseq, edgeR = sig_edgeR)) +
+    scale_fill_gradientn(colors = c("#4B9CD3", "#FFFFCC", "#FF69B4")) +
+    theme(legend.position = "none")
+
+###tables of each pipeline DEG
+##DESeq only DEG list
+> deseq_only_table <- res_deseq[only_deseq, ]
+> deseq_only_table
+
+##EdgeR only DEG (top 20)
+> edgeR_only_table <- edgeR_results[only_edgeR, ]
+>
+> # Sort by FDR (ascending = most significant)
+> edgeR_only_top <- edgeR_only_table[order(edgeR_only_table$FDR), ] [1:20, ]
+>  # Show the top 20
+> head(edgeR_only_top, 20)
+##DESeq2 total top 20 genes
+ deseq_top20 <- res_deseq[order(res_deseq$padj), ][1:20, ]
+> deseq_top20
+## EdgeR total top 20
+> edgeR_top20 <- edgeR_results[order(edgeR_results$FDR), ][1:20, ]
+> edgeR_top20
+##Figure out which genes in the top 20 from each pipeline are the same
+> intersect(rownames(deseq_top20), rownames(edgeR_top20))
+#shows overlap from both pipelines top 20 lists
+> combined_top20 <- merge(
++     deseq_top20,
++     edgeR_top20,
++     by = "row.names",
++     suffixes = c("_DESeq2", "_edgeR")
++ )
+##creating Volcano plot for both pipelines
+> # DESeq2
+> y_deseq <- -log10(res_df$padj)
+> y_deseq <- y_deseq[is.finite(y_deseq)]
+>
+> # edgeR
+> y_edger <- -log10(edgeR_df$FDR)
+> y_edger <- y_edger[is.finite(y_edger)]
+>
+> xlim_volcano <- range(c(res_df$log2FoldChange, edgeR_df$logFC), na.rm = TRUE)
+> ylim_volcano <- c(0, max(c(y_deseq, y_edger), na.rm = TRUE))
+>
+> ggplot(res_df, aes(x = log2FoldChange, y = -log10(padj))) +
++     geom_point(alpha = 0.4, color = "steelblue") +
++     coord_cartesian(xlim = xlim_volcano, ylim = ylim_volcano) +
++     theme_minimal() +
++     labs(title = "DESeq2 Volcano Plot",
++          x = "log2 Fold Change",
++          y = "-log10 adjusted p-value")
+> ggplot(edgeR_df, aes(x = logFC, y = -log10(FDR))) +
++     geom_point(alpha = 0.4, color = "darkorange") +
++     coord_cartesian(xlim = xlim_volcano, ylim = ylim_volcano) +
++     theme_minimal() +
++     labs(title = "edgeR Volcano Plot",
++          x = "log2 Fold Change",
++          y = "-log10 FDR")
+##make correlation plot
+> common <- intersect(rownames(res_deseq), rownames(edgeR_results))
+> df_cor <- data.frame(
++     DESeq2 = res_deseq[common, "log2FoldChange"],
++     edgeR  = edgeR_results[common, "logFC"]
++ )
+>
+> ggplot(df_cor, aes(DESeq2, edgeR)) +
++     geom_point(alpha = 0.3) +
++     geom_smooth(method = "lm", color = "red") +
++     theme_minimal() +
++     labs(title = "Correlation of log2FC: DESeq2 vs edgeR",
++          x = "DESeq2 log2FC",
++          y = "edgeR log2FC")
+###Create MA plot for EdgeR to compare to DESeq2
+> edgeR_df$DEG <- ifelse(edgeR_df$FDR < 0.05, "DEG", "Not DEG")
+> ggplot(edgeR_df, aes(x = logCPM, y = logFC, color = DEG)) +
++     geom_point(alpha = 0.5) +
++     scale_color_manual(values = c("Not DEG" = "gray70", "DEG" = "darkorange")) +
++     theme_minimal() +
++     labs(title = "edgeR MA Plot",
++          x = "logCPM",
++          y = "log2 Fold Change")
